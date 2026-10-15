@@ -54,6 +54,30 @@ def stress_summary(forward, cost_bps=10, shock=0.10):
     return summary
 
 
+def client_constraints(forward, min_full_cash=70_000, max_cancelled_loss=3_000,
+                       cost_bps=10, shock=0.10, hedge_step=10_000):
+    limits = (min_full_cash, max_cancelled_loss)
+    if not all(math.isfinite(x) and x >= 0 for x in limits):
+        raise ValueError("Client limits must be finite and non-negative")
+    if not math.isfinite(shock) or not 0 <= shock < 1:
+        raise ValueError("Shock must be finite, at least zero and below one")
+    if type(hedge_step) is not int or hedge_step <= 0 or EXPECTED_USD % hedge_step:
+        raise ValueError("Hedge step must be a positive integer dividing 100,000")
+    spots = (forward * (1 - shock), forward, forward * (1 + shock))
+    rows = []
+    for hedge in range(0, EXPECTED_USD + 1, hedge_step):
+        full = min(settle(EXPECTED_USD, hedge, forward, spot, cost_bps)["cash_gbp"]
+                   for spot in spots)
+        cancelled = min(settle(0, hedge, forward, spot, cost_bps)["cash_gbp"]
+                        for spot in spots)
+        full_ok = full >= min_full_cash
+        cancelled_ok = cancelled >= -max_cancelled_loss
+        rows.append({"hedge_usd": hedge, "min_full_cash_gbp": full,
+                     "min_cancelled_cash_gbp": cancelled, "full_cash_ok": full_ok,
+                     "cancellation_ok": cancelled_ok, "feasible": full_ok and cancelled_ok})
+    return rows
+
+
 def add_months(day, months):
     year, month = divmod(day.year * 12 + day.month - 1 + months, 12)
     month += 1
@@ -162,6 +186,30 @@ def show_stress(start, forward, cost_bps=10, shock=0.10):
     print("Scenario minima, not guaranteed cash floors. Orders and future rates are assumed.")
 
 
+def show_client_constraints(forward):
+    print(f"\nCLIENT LIMITS: forward {forward:.4f} USD/GBP; full receipt must reach GBP 70,000")
+    print("Hedges: USD 0 to 100,000; limits and future rates are assumed.")
+    print("Shock  Fee bp  Max loss GBP  Min H/full  Max H/cancel  Feasible USD (10k grid | 5k grid)")
+    for shock in (0.10, 0.15):
+        for fee in (10, 50):
+            for loss in (3_000, 5_000):
+                rows = client_constraints(forward, max_cancelled_loss=loss,
+                                          cost_bps=fee, shock=shock)
+                fine = client_constraints(forward, max_cancelled_loss=loss,
+                                          cost_bps=fee, shock=shock, hedge_step=5_000)
+                full = [r["hedge_usd"] for r in rows if r["full_cash_ok"]]
+                cancelled = [r["hedge_usd"] for r in rows if r["cancellation_ok"]]
+                feasible = [f"{r['hedge_usd']:,}" for r in rows if r["feasible"]]
+                refined = [f"{r['hedge_usd']:,}" for r in fine if r["feasible"]]
+                lower = f"{min(full):,}" if full else "none"
+                upper = f"{max(cancelled):,}" if cancelled else "none"
+                print(f"{shock:5.0%} {fee:7} {loss:13,} {lower:>11} {upper:>13}"
+                      f"  {' / '.join(feasible) or 'none'} | {' / '.join(refined) or 'none'}")
+    print("Min H/full and Max H/cancel are bounds on the 10k grid; a coarser grid can miss choices.")
+    print("Full receipt and cancellation are separate cases; both limits must pass.")
+    print("Results apply only to this grid and stress range, not guaranteed cash floors.")
+
+
 def plot_results(rows, first):
     import matplotlib
     matplotlib.use("Agg")
@@ -248,6 +296,7 @@ if __name__ == "__main__":
     rates = load_rates()
     first = make_cases(rates)[0]
     show_stress(first["start"], first["forward"])
+    show_client_constraints(first["forward"])
     rows = run(rates)
     save_results(rows)
     show_summary(rows)

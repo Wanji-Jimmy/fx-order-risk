@@ -1,26 +1,33 @@
 # FX hedging when an order changes
 
-A UK exporter expects $100,000 in three months. It can lock an exchange rate for none, half or all of that payment. But what happens if the customer pays less?
+A UK exporter expects $100,000 in three months. How much should it lock at an agreed exchange rate if the customer might pay less or cancel?
 
 This Python study combines Bank of England historical rates with hypothetical orders. **A forward can fix the exchange rate, but it cannot make the customer's payment arrive.** If the receipt is smaller than the contract, the missing dollars must be bought.
 
-## How much payment can the client rely on?
+## Can both client requirements be met?
 
-Compare three payment assumptions before signing. Use the first available forward rate, 1.3620 dollars per pound on 2 January 2018, and assumed future spot rates 10% below, equal to, or 10% above it. Conversion costs are an assumed 0.1% on each leg.
+Suppose the client wants at least **£70,000 if the full order is paid**, and no more than **£3,000 lost if it is cancelled**. These are illustrative limits on currency cash, before business costs. Check contracts from $0 to $100,000, first in $10,000 steps and then in $5,000 steps.
+
+Use the first available forward rate, 1.3620 dollars per pound on 2 January 2018. Future spot is assumed to be below, equal to, or above this rate by the stated shock. Costs apply to both currency legs.
+
+| Shock / cost / cancellation loss limit | Passing hedges: $10k steps | Passing hedges: $5k steps |
+|---|---|---|
+| ±10% / 0.1% / £3,000 | None | None |
+| ±10% / 0.1% / £5,000 | $50k, $60k | $50k, $55k, $60k |
+| ±10% / 0.5% / £5,000 | None | $55k |
+| ±15% / 0.1% / £5,000 | None | None |
+
+The original limits conflict: on the $10k grid, meeting the receipt target requires at least $50k hedged, while the cancellation limit allows at most $30k. With a £5,000 loss limit, a $50,000 contract gives minimum full-order cash of **£70,014** and minimum cancelled-order cash of **−£4,156**.
+
+The coarse grid misses a choice at the higher fee: $55k gives **£70,066** with the full order and **−£4,913** after cancellation, using each scenario's minimum. "No passing hedge" can mean the search is too coarse. Widening the FX shock to ±15% leaves no passing choice on either tested grid.
+
+The same contract must pass both tests, although the two minima occur in separate order and exchange-rate scenarios. These are selected scenario minima, not guaranteed cash floors, probabilities or an optimal hedge. The next client discussion is about budget and loss tolerance.
+
+The business question has a real counterpart: [Renishaw's 2025 annual report, p.155](https://www.renishaw.com/resourcecentre/en/download/annual-report-2025--144405), identifies changes in sales timing and reductions in highly probable forecast sales as possible causes of hedge ineffectiveness. This motivates the question; the client, limits and orders here are hypothetical.
+
+The simpler comparison below shows how assumptions about reliable payment change the outcome of no hedge, a half hedge or a full hedge.
 
 ![Lowest cash under three possible payment assumptions](hedge_choices.png)
-
-If the client assumes at least $50,000 will arrive:
-
-| Dollars locked | Lowest cash in these scenarios | Most dollars to buy |
-|---|---:|---:|
-| $0 | £33,340 | $0 |
-| $50,000 | £36,674 | $0 |
-| $100,000 | £32,518 | $50,000 |
-
-Locking $50,000 gives £4,156 more minimum cash than locking $100,000 **within this grid**. It avoids buying missing dollars if the payment assumption holds. The rest of any payment remains exposed to exchange-rate changes.
-
-That does not make 50% universally best. If the customer can cancel entirely, the same $50,000 contract has a minimum cash outcome of −£4,156. These are scenario minima, not guaranteed cash floors or probabilities.
 
 ## What happened at historical rates?
 
@@ -47,9 +54,8 @@ Example: a $100,000 contract at F=1.25 pays £80,000. If only $50,000 arrives an
 
 1. Compare no hedge, half and full hedges using a cash ledger.
 2. Reduce or cancel the order: a larger contract can create a dollar shortfall.
-3. Compare choices using payment assumptions before signing. Historical outcomes cannot identify the right contract in advance.
-
-This version shows the full historical sample and puts payment uncertainty first. Earlier code and figures are retained in a local archive.
+3. Set client limits before signing and check whether any contract meets both. Historical outcomes cannot identify the right contract in advance.
+4. Repeat the search at smaller dollar steps: the first grid missed a feasible contract at the higher fee.
 
 ## Run it
 
@@ -61,7 +67,7 @@ python -m unittest test_analysis.py -v
 python analysis.py
 ```
 
-Read `settle()` first, then `stress_summary()`. The script prints the stress comparison and recreates `results.csv` and both charts. Stress scenarios use assumed future rates, not realised maturity rates.
+Read `settle()` first, then `client_constraints()` and `stress_summary()`. The script prints both scenario comparisons and recreates historical `results.csv` and both charts. The client test uses assumed future rates, not realised maturity rates.
 
 Try one change: only $25,000 arrives despite an assumed $50,000 minimum. The $50,000 contract now requires buying another $25,000:
 
@@ -91,6 +97,6 @@ For cancelled orders with $100,000 locked, across all 42 starts:
 
 `gap_gbp` compares cash with the actual receipt converted at the starting forward rate, less the same fee. It separates currency effects from lost sales after the event; it is not an advance budget. `hedge_effect_gbp` compares with no hedge for the same order and dates. The old gap chart is retained in the local archive.
 
-Tests cover hand-calculated cash, both conversion legs, dollar shortfalls, date boundaries and stress comparisons. There is no daily margin, funding or operating-cost model. Fees are assumed, and a dollar shortfall is not itself an external financing requirement. Payment floors can fail; exchange rates can move beyond the chosen stress range.
+Tests cover hand-calculated cash, both conversion legs, dollar shortfalls, dates, exact client-limit boundaries and changes in feasible hedges. There is no daily margin, funding or operating-cost model. Fees are assumed, and a dollar shortfall is not itself an external financing requirement. Payment floors can fail; exchange rates can move beyond the chosen stress range.
 
 </details>

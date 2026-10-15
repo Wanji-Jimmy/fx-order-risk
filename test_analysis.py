@@ -3,7 +3,8 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from analysis import add_months, load_rates, make_cases, settle, settlement_date, stress_summary
+from analysis import (add_months, client_constraints, load_rates, make_cases, settle,
+                      settlement_date, stress_summary)
 
 
 class CashFlowTests(unittest.TestCase):
@@ -149,6 +150,65 @@ class StressTests(unittest.TestCase):
             with self.subTest(shock=shock):
                 with self.assertRaises(ValueError):
                     stress_summary(1.25, shock=shock)
+
+
+class ClientConstraintTests(unittest.TestCase):
+    def test_cash_minima_and_exact_limits_match_hand_calculation(self):
+        row = client_constraints(1.25, 73_260, 10_090, shock=0.20)[5]
+        self.assertEqual(row["hedge_usd"], 50_000)
+        # Full: 40,000 + 33,333.33 less fees; cancelled: 40,000 - 50,000 - 90.
+        self.assertAlmostEqual(row["min_full_cash_gbp"], 73_260)
+        self.assertAlmostEqual(row["min_cancelled_cash_gbp"], -10_090)
+        self.assertTrue(row["feasible"])
+        row = client_constraints(1.25, 73_260.01, 10_090, shock=0.20)[5]
+        self.assertFalse(row["full_cash_ok"])
+        self.assertTrue(row["cancellation_ok"])
+        self.assertFalse(row["feasible"])
+        row = client_constraints(1.25, 73_260, 10_089.99, shock=0.20)[5]
+        self.assertTrue(row["full_cash_ok"])
+        self.assertFalse(row["cancellation_ok"])
+        self.assertFalse(row["feasible"])
+
+    def test_client_tradeoff_changes_with_limits_costs_and_stress(self):
+        for loss, fee, shock, expected in [(3000, 10, 0.10, []),
+                                          (5000, 10, 0.10, [50_000, 60_000]),
+                                          (5000, 50, 0.10, []),
+                                          (5000, 10, 0.15, [])]:
+            with self.subTest(loss=loss, fee=fee, shock=shock):
+                rows = client_constraints(1.362, max_cancelled_loss=loss,
+                                          cost_bps=fee, shock=shock)
+                self.assertEqual([r["hedge_usd"] for r in rows if r["feasible"]], expected)
+
+    def test_no_hedge_and_full_hedge_endpoints(self):
+        rows = client_constraints(1.25, shock=0.20)
+        self.assertEqual([r["hedge_usd"] for r in rows], list(range(0, 100_001, 10_000)))
+        self.assertEqual(rows[0]["min_cancelled_cash_gbp"], 0)
+        self.assertAlmostEqual(rows[0]["min_full_cash_gbp"], 66_600)
+        self.assertAlmostEqual(rows[-1]["min_full_cash_gbp"], 79_920)
+
+    def test_coarse_grid_can_miss_a_feasible_hedge(self):
+        coarse = client_constraints(1.362, max_cancelled_loss=5000, cost_bps=50)
+        fine = client_constraints(1.362, max_cancelled_loss=5000, cost_bps=50,
+                                  hedge_step=5000)
+        self.assertEqual([r["hedge_usd"] for r in coarse if r["feasible"]], [])
+        self.assertEqual([r["hedge_usd"] for r in fine if r["feasible"]], [55_000])
+        self.assertAlmostEqual(fine[11]["min_full_cash_gbp"], 70_065.74556134)
+        self.assertAlmostEqual(fine[11]["min_cancelled_cash_gbp"], -4_913.11796378)
+
+    def test_invalid_grid_steps_are_rejected(self):
+        for step in (0, -5000, 3000, 100001, 5000.0, True, float("nan"), float("inf")):
+            with self.subTest(step=step):
+                with self.assertRaises(ValueError):
+                    client_constraints(1.25, hedge_step=step)
+
+    def test_invalid_limits_and_shocks_are_rejected(self):
+        for name in ("min_full_cash", "max_cancelled_loss", "shock"):
+            for invalid in (-1, float("nan"), float("inf")):
+                with self.subTest(name=name, invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        client_constraints(1.25, **{name: invalid})
+        with self.assertRaises(ValueError):
+            client_constraints(1.25, shock=1)
 
 
 if __name__ == "__main__":
